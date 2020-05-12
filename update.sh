@@ -6,6 +6,11 @@ shopt -s nullglob
 # curl -fsSL 'https://www.apache.org/dist/tomcat/tomcat-8/KEYS' | gpg --import
 # gpg --fingerprint | grep 'Key fingerprint =' | cut -d= -f2 | sed -r 's/ +//g' | sort
 declare -A gpgKeys=(
+	# gpg: key 10C01C5A2F6059E7: public key "Mark E D Thomas <markt@apache.org>" imported
+	[10]='
+		A9C5DF4D22E99998D9875A5110C01C5A2F6059E7
+	'
+
 	# gpg: key F22C4FED: public key "Andy Armstrong <andy@tagish.com>" imported
 	# gpg: key 86867BA6: public key "Jean-Frederic Clere (jfclere) <JFrederic.Clere@fujitsu-siemens.com>" imported
 	# gpg: key E86E29AC: public key "kevin seguin <seguin@apache.org>" imported
@@ -103,7 +108,9 @@ if [ ${#versions[@]} -eq 0 ]; then
 fi
 versions=( "${versions[@]%/}" )
 
-travisEnv=
+# sort version numbers with lowest first
+IFS=$'\n'; versions=( $(sort -V <<<"${versions[*]}") ); unset IFS
+
 for version in "${versions[@]}"; do
 	majorVersion="${version%%.*}"
 
@@ -138,14 +145,14 @@ for version in "${versions[@]}"; do
 
 	echo "$version: $fullVersion ($sha512)"
 
-	for javaDir in "$version"/{jre,jdk}{8,11,12,13}/; do
+	for javaDir in "$version"/{jre,jdk}{8,11,14}/; do
 		javaDir="${javaDir%/}"
 		javaVariant="$(basename "$javaDir")"
 		javaVersion="${javaVariant#jdk}"
 		javaVersion="${javaVersion#jre}" # "11", "8"
 		javaVariant="${javaVariant%$javaVersion}" # "jdk", "jre"
 		# all variants in reverse alphabetical order followed by OpenJDK
-		for vendorDir in "$javaDir"/{corretto,adoptopenjdk-{openj9,hotspot},openjdk{-slim,-oracle,}}/; do
+		for vendorDir in "$javaDir"/{corretto,adoptopenjdk-{openj9,hotspot},openjdk{-slim,{-slim,}-buster,-oracle,}}/; do
 			vendorDir="${vendorDir%/}"
 			vendor="$(basename "$vendorDir")"
 			[ -d "$vendorDir" ] || continue
@@ -153,11 +160,11 @@ for version in "${versions[@]}"; do
 			template=
 			baseImage=
 			case "$vendor" in
-				openjdk | openjdk-slim)
+				openjdk | openjdk-slim | openjdk*-buster)
 					template='apt'
 					baseImage="openjdk:$javaVersion-$javaVariant"
-					if [ "$vendor" = 'openjdk-slim' ]; then
-						baseImage+='-slim'
+					if vendorVariant="${vendor#openjdk-}" && [ "$vendorVariant" != "$vendor" ]; then
+						baseImage+="-$vendorVariant"
 					fi
 					;;
 				openjdk-oracle)
@@ -196,11 +203,6 @@ for version in "${versions[@]}"; do
 				-e 's/^(ENV GPG_KEYS) .*/\1 '"${versionGpgKeys[*]}"'/' \
 				"Dockerfile-$template.template" \
 				> "$vendorDir/Dockerfile"
-
-			travisEnv='\n  - '"CONTEXT=$vendorDir$travisEnv"
 		done
 	done
 done
-
-travis="$(awk -v 'RS=\n\n' -v travisEnv="$travisEnv" '$1 == "env:" { $0 = "env:" travisEnv } { printf "%s%s", $0, RS }' .travis.yml)"
-cat <<<"$travis" > .travis.yml

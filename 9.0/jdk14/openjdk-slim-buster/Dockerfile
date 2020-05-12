@@ -1,4 +1,4 @@
-FROM openjdk:13-jdk-oracle
+FROM openjdk:14-jdk-slim-buster
 
 ENV CATALINA_HOME /usr/local/tomcat
 ENV PATH $CATALINA_HOME/bin:$PATH
@@ -14,50 +14,35 @@ ENV LD_LIBRARY_PATH ${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TOMCAT_NATIVE_LIBDIR
 ENV GPG_KEYS 05AB33110949707C93A279E3D3EFE6B686867BA6 07E48665A34DCAFAE522E5E6266191C37C037D42 47309207D818FFD8DCD3F83F1931D684307A10A5 541FBE7D8F78B25E055DDEE13C370389288584E7 61B832AC2F1C5A90F0F9B00A1C506407564C17A3 79F7026C690BAA50B92CD8B66A3AD3F4F22C4FED 9BA44C2621385CB966EBA586F72C284D731FABEE A27677289986DB50844682F8ACB77FC2E86E29AC A9C5DF4D22E99998D9875A5110C01C5A2F6059E7 DCFD35E0BF8CA7344752DE8B6FB21E8933C60243 F3A04C595DB5B6A5F1ECA43E3B7BBB100D811BBE F7DA48BB64BCB84ECBA7EE6935CD23C10D498E23
 
 ENV TOMCAT_MAJOR 9
-ENV TOMCAT_VERSION 9.0.30
-ENV TOMCAT_SHA512 40bf428a534816317e5e8732b679e6d73f6ed977aab4ac5e2b9eaf1eb087eaa68a18b0fd3da8c39ca4b96f5b6fd919dec84517abba0d5e797285ade934a92990
+ENV TOMCAT_VERSION 9.0.35
+ENV TOMCAT_SHA512 0db27185d9fc3174f2c670f814df3dda8a008b89d1a38a5d96cbbe119767ebfb1cf0bce956b27954aee9be19c4a7b91f2579d967932207976322033a86075f98
 
 RUN set -eux; \
 	\
-# http://yum.baseurl.org/wiki/YumDB.html
-	if ! command -v yumdb > /dev/null; then \
-		yum install -y yum-utils; \
-		yumdb set reason dep yum-utils; \
-	fi; \
-	if [ -f /etc/oracle-release ]; then \
-# TODO there's an odd bug on Oracle Linux where installing "cpp" (which gets pulled in as a dependency of "gcc") and then marking it as automatically-installed will result in the "filesystem" package being removed during "yum autoremove" (which then fails), so we set it as manually-installed to compensate
-		yumdb set reason user filesystem; \
-	fi; \
-# a helper function to "yum install" things, but only if they aren't installed (and to set their "reason" to "dep" so "yum autoremove" can purge them for us)
-	_yum_install_temporary() { ( set -eu +x; \
-		local pkg todo=''; \
-		for pkg; do \
-			if ! rpm --query "$pkg" > /dev/null 2>&1; then \
-				todo="$todo $pkg"; \
-			fi; \
-		done; \
-		if [ -n "$todo" ]; then \
-			set -x; \
-			yum install -y $todo; \
-			yumdb set reason dep $todo; \
-		fi; \
-	) }; \
-	_yum_install_temporary gzip tar; \
+	savedAptMark="$(apt-mark showmanual)"; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		gnupg dirmngr \
+		wget ca-certificates \
+	; \
 	\
 	ddist() { \
 		local f="$1"; shift; \
 		local distFile="$1"; shift; \
+		local mvnFile="${1:-}"; \
 		local success=; \
 		local distUrl=; \
 		for distUrl in \
 # https://issues.apache.org/jira/browse/INFRA-8753?focusedCommentId=14735394#comment-14735394
-			'https://www.apache.org/dyn/closer.cgi?action=download&filename=' \
+			"https://www.apache.org/dyn/closer.cgi?action=download&filename=$distFile" \
 # if the version is outdated (or we're grabbing the .asc file), we might have to pull from the dist/archive :/
-			https://www-us.apache.org/dist/ \
-			https://www.apache.org/dist/ \
-			https://archive.apache.org/dist/ \
+			"https://www-us.apache.org/dist/$distFile" \
+			"https://www.apache.org/dist/$distFile" \
+			"https://archive.apache.org/dist/$distFile" \
+# if all else fails, let's try Maven (https://www.mail-archive.com/users@tomcat.apache.org/msg134940.html; https://mvnrepository.com/artifact/org.apache.tomcat/tomcat; https://repo1.maven.org/maven2/org/apache/tomcat/tomcat/)
+			${mvnFile:+"https://repo1.maven.org/maven2/org/apache/tomcat/tomcat/$mvnFile"} \
 		; do \
-			if curl -fL -o "$f" "$distUrl$distFile" && [ -s "$f" ]; then \
+			if wget -O "$f" "$distUrl" && [ -s "$f" ]; then \
 				success=1; \
 				break; \
 			fi; \
@@ -65,9 +50,9 @@ RUN set -eux; \
 		[ -n "$success" ]; \
 	}; \
 	\
-	ddist 'tomcat.tar.gz' "tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz"; \
+	ddist 'tomcat.tar.gz' "tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz" "$TOMCAT_VERSION/tomcat-$TOMCAT_VERSION.tar.gz"; \
 	echo "$TOMCAT_SHA512 *tomcat.tar.gz" | sha512sum --strict --check -; \
-	ddist 'tomcat.tar.gz.asc' "tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc"; \
+	ddist 'tomcat.tar.gz.asc' "tomcat/tomcat-$TOMCAT_MAJOR/v$TOMCAT_VERSION/bin/apache-tomcat-$TOMCAT_VERSION.tar.gz.asc" "$TOMCAT_VERSION/tomcat-$TOMCAT_VERSION.tar.gz.asc"; \
 	export GNUPGHOME="$(mktemp -d)"; \
 	for key in $GPG_KEYS; do \
 		gpg --batch --keyserver ha.pool.sks-keyservers.net --recv-keys "$key"; \
@@ -86,17 +71,20 @@ RUN set -eux; \
 	\
 	nativeBuildDir="$(mktemp -d)"; \
 	tar -xf bin/tomcat-native.tar.gz -C "$nativeBuildDir" --strip-components=1; \
-	_yum_install_temporary \
-		apr-devel \
+	apt-get install -y --no-install-recommends \
+		dpkg-dev \
 		gcc \
+		libapr1-dev \
+		libssl-dev \
 		make \
-		openssl-devel \
 	; \
 	( \
 		export CATALINA_HOME="$PWD"; \
 		cd "$nativeBuildDir/native"; \
+		gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"; \
 		aprConfig="$(command -v apr-1-config)"; \
 		./configure \
+			--build="$gnuArch" \
 			--libdir="$TOMCAT_NATIVE_LIBDIR" \
 			--prefix="$CATALINA_HOME" \
 			--with-apr="$aprConfig" \
@@ -108,20 +96,19 @@ RUN set -eux; \
 	rm -rf "$nativeBuildDir"; \
 	rm bin/tomcat-native.tar.gz; \
 	\
-# mark any explicit dependencies as manually installed
-	deps="$( \
-		find "$TOMCAT_NATIVE_LIBDIR" -type f -executable -exec ldd '{}' ';' \
-			| awk '/=>/ && $(NF-1) != "=>" { print $(NF-1) }' \
-			| sort -u \
-			| xargs -r rpm --query --whatprovides \
-			| sort -u \
-	)"; \
-	[ -z "$deps" ] || yumdb set reason user $deps; \
-	\
-# clean up anything added temporarily and not later marked as necessary
-	yum autoremove -y; \
-	yum clean all; \
-	rm -rf /var/cache/yum; \
+# reset apt-mark's "manual" list so that "purge --auto-remove" will remove all build dependencies
+	apt-mark auto '.*' > /dev/null; \
+	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
+	find "$TOMCAT_NATIVE_LIBDIR" -type f -executable -exec ldd '{}' ';' \
+		| awk '/=>/ { print $(NF-1) }' \
+		| sort -u \
+		| xargs -r dpkg-query --search \
+		| cut -d: -f1 \
+		| sort -u \
+		| xargs -r apt-mark manual \
+	; \
+	apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+	rm -rf /var/lib/apt/lists/*; \
 	\
 # sh removes env vars it doesn't support (ones with periods)
 # https://github.com/docker-library/tomcat/issues/77
@@ -137,7 +124,7 @@ RUN set -e \
 	&& nativeLines="$(catalina.sh configtest 2>&1)" \
 	&& nativeLines="$(echo "$nativeLines" | grep 'Apache Tomcat Native')" \
 	&& nativeLines="$(echo "$nativeLines" | sort -u)" \
-	&& if ! echo "$nativeLines" | grep 'INFO: Loaded APR based Apache Tomcat Native library' >&2; then \
+	&& if ! echo "$nativeLines" | grep -E 'INFO: Loaded( APR based)? Apache Tomcat Native library' >&2; then \
 		echo >&2 "$nativeLines"; \
 		exit 1; \
 	fi

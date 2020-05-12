@@ -7,10 +7,12 @@ declare -A latestVariant=(
 	[8.0]="jdk8-$defaultVendorVariant"
 	[8.5]="jdk8-$defaultVendorVariant"
 	[9.0]="jdk11-$defaultVendorVariant"
+	[10.0]="jdk11-$defaultVendorVariant"
 )
 declare -A aliases=(
-	[8.5]='8 latest'
-	[9.0]='9'
+	[8.5]='8'
+	[9.0]='9 latest'
+	[10.0]='10'
 )
 
 self="$(basename "$BASH_SOURCE")"
@@ -76,9 +78,9 @@ join() {
 }
 
 for version in "${versions[@]}"; do
-	for javaVariant in {jdk,jre}{13,12,11,8}; do
+	for javaVariant in {jdk,jre}{14,11,8}; do
 		# OpenJDK, followed by all other variants alphabetically
-		for vendorVariant in {openjdk{,-oracle,-slim},adoptopenjdk-{hotspot,openj9},corretto}; do
+		for vendorVariant in {openjdk{,-oracle,{,-slim}-buster,-slim},adoptopenjdk-{hotspot,openj9},corretto}; do
 			variant="$javaVariant-$vendorVariant"
 			dir="$version/$javaVariant/$vendorVariant"
 			[ -f "$dir/Dockerfile" ] || continue
